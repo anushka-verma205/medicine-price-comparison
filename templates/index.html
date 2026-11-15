@@ -320,61 +320,106 @@
           </tbody>
         </table>
       </div>
-      <!-- MATCHED (LIKE-FOR-LIKE) ANOVA -->
-      <div class="anova-inline">
-        <div class="anova-inline-heading">
-          <div>
-            <p class="eyebrow">STATISTICAL INSIGHT · LIKE-FOR-LIKE</p>
-            <h4>Price per Unit by Pharmacy (matched medicines)</h4>
-            <p class="section-description">
-              Two-way ANOVA (medicine as block) · Significance level: 0.05
-            </p>
-          </div>
-          <span class="anova-tag">ANOVA</span>
-        </div>
+      
+      <!-- TWO-WAY ANOVA SECTION -->
 
-        {% if matched_anova.error %}
-        <div class="anova-error">{{ matched_anova.error }}</div>
-        {% else %}
-        <div class="anova-content">
-          <div class="anova-table-area">
-            <h5>Adjusted Price per Tablet/Capsule</h5>
-            <div class="table-wrap">
-              <table class="anova-table">
-                <thead><tr><th>Pharmacy</th><th>Adjusted price / unit</th><th>Raw mean</th><th>Listings</th></tr></thead>
-                <tbody>
-                  {% for pharmacy, price in matched_anova.groups.items() %}
-                  <tr>
-                    <td class="pharmacy-name">{{ pharmacy }}</td>
-                    <td>₹{{ "%.3f"|format(price) }}</td>
-                    <td>₹{{ "%.3f"|format(matched_anova.raw_means[pharmacy]) }}</td>
-                    <td>{{ matched_anova.sample_sizes[pharmacy] }}</td>
-                  </tr>
-                  {% endfor %}
-                </tbody>
-              </table>
-            </div>
-            <p class="section-description">Matched medicines: {{ matched_anova.medicines|join(', ') }}</p>
-          </div>
-          <div class="anova-results">
-            <h5>Test Results</h5>
-            <div class="anova-metrics">
-              <div class="anova-metric"><span>F-Statistic</span><strong>{{ matched_anova.f_stat }}</strong></div>
-              <div class="anova-metric"><span>P-Value</span><strong>{{ "%.6f"|format(matched_anova.p_value) }}</strong></div>
-              <div class="anova-metric"><span>Degrees of freedom</span><strong>{{ matched_anova.df[0] }}, {{ matched_anova.df[1] }}</strong></div>
-            </div>
-            {% if matched_anova.significant %}
-            <div class="anova-conclusion significant"><strong>✓ Significant price difference</strong>
-              <p>After comparing identical medicines, at least one pharmacy's price per unit differs (p &lt; 0.05).</p></div>
-            {% else %}
-            <div class="anova-conclusion not-significant"><strong>No significant difference found</strong>
-              <p>For identical medicines, there is insufficient evidence that price per unit differs between pharmacies.</p></div>
-            {% endif %}
-            <p class="section-description">{{ matched_anova.note }}</p>
-          </div>
-        </div>
-        {% endif %}
-      </div>
+      <section class="analysis-section" id="anova-section">
+
+          <h3>Two-Way ANOVA Analysis</h3>
+
+          <p>
+              This analysis examines the effect of pharmacy,
+              medicine, and their interaction on medicine prices.
+          </p>
+
+          {% if two_way_anova.error %}
+
+              <p class="error-message">
+                  {{ two_way_anova.error }}
+              </p>
+
+          {% else %}
+
+              <h4>ANOVA Results</h4>
+
+              <div class="table-wrap">
+                  <table>
+                      <thead>
+                          <tr>
+                              <th>Effect</th>
+                              <th>F-Statistic</th>
+                              <th>P-Value</th>
+                              <th>Significant?</th>
+                          </tr>
+                      </thead>
+
+                      <tbody>
+                          {% for effect in two_way_anova.effects %}
+                          <tr>
+                              <td>{{ effect.effect }}</td>
+
+                              <td>
+                                  {{ "%.4f"|format(effect.f_stat)
+                                    if effect.f_stat is not none else "—" }}
+                              </td>
+
+                              <td>
+                                  {{ "%.3e"|format(effect.p_value)
+                                    if effect.p_value is not none else "—" }}
+                              </td>
+
+                              <td>
+                                  {{ "Yes" if effect.significant else "No" }}
+                              </td>
+                          </tr>
+                          {% endfor %}
+                      </tbody>
+                  </table>
+              </div>
+
+              <h4>Pharmacy Price Summary</h4>
+
+              <div class="table-wrap">
+                  <table>
+                      <thead>
+                          <tr>
+                              <th>Pharmacy</th>
+                              <th>Average Price per Unit</th>
+                              <th>Sample Size</th>
+                          </tr>
+                      </thead>
+
+                      <tbody>
+                          {% for pharmacy, price in two_way_anova.raw_means.items() %}
+                          <tr>
+                              <td>{{ pharmacy }}</td>
+                              <td>₹{{ "%.3f"|format(price) }}</td>
+                              <td>
+                                  {{ two_way_anova.sample_sizes[pharmacy] }}
+                              </td>
+                          </tr>
+                          {% endfor %}
+                      </tbody>
+                  </table>
+              </div>
+
+              <p>
+                  Total observations:
+                  {{ two_way_anova.observations }}
+              </p>
+
+              <p>
+                  Matched medicines:
+                  {{ two_way_anova.medicines|length }}
+              </p>
+
+              <p>
+                  Significance level: 0.05
+              </p>
+
+          {% endif %}
+      </section>
+
     </div>
   </section>
 

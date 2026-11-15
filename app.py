@@ -1,13 +1,13 @@
 from pathlib import Path
 
 from flask import Flask, render_template, request, redirect, url_for, flash, make_response
-
 import pandas as pd
 import numpy as np
 import re
 from src.processor import load_local_folder, combine_sources, price_comparison
-
-from scipy.stats import f_oneway ,f as f_dist, pearsonr, spearmanr
+from statsmodels.stats.anova import anova_lm
+from statsmodels.formula.api import ols
+from scipy.stats import pearsonr, spearmanr
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -29,64 +29,162 @@ def load_data():
 
 PHARMACIES = ["Jan Aushadhi", "Tata 1mg", "Apollo Pharmacy"]
 
-def calculate_matched_anova(data):
-    """Like-for-like ANOVA: price PER UNIT (tablet/capsule) compared across pharmacies
-    after controlling for the medicine itself (same composition + strength + form).
 
-    Implemented as a randomized-block / two-way additive ANOVA (medicine = block,
-    pharmacy = factor) using an F-test of the full model against a medicine-only
-    model, so unequal numbers of listings per pharmacy are handled correctly.
+def calculate_two_way_anova(data):
     """
+    Two-Way ANOVA with interaction.
+
+    Factor 1: Pharmacy
+    Factor 2: Medicine
+    Dependent variable: Price per unit
+    """
+
     needed = ["equivalent_key", "pharmacy", "price_per_unit"]
+
     if data.empty or not all(c in data.columns for c in needed):
-        return {"error": "No price data is available for the matched ANOVA."}
+        return {"error": "No price data is available for Two-Way ANOVA."}
 
     df = data[needed].copy()
-    df["price_per_unit"] = pd.to_numeric(df["price_per_unit"], errors="coerce")
-    df = df[df["price_per_unit"].notna() & (df["price_per_unit"] > 0)
-            & df["equivalent_key"].fillna("").astype(str).ne("")
-            & df["pharmacy"].isin(PHARMACIES)]
-    # keep only medicines sold by at least two of the pharmacies
-    df = df[df.groupby("equivalent_key")["pharmacy"].transform("nunique") >= 2]
-    if df.empty or df["pharmacy"].nunique() < 2:
-        return {"error": "No medicine has a matched price per unit in at least two pharmacies."}
 
-    pharmacies = [p for p in PHARMACIES if p in set(df["pharmacy"])]
-    keys = sorted(df["equivalent_key"].unique())
-    y = df["price_per_unit"].to_numpy(float)
-    block = pd.get_dummies(df["equivalent_key"]).reindex(columns=keys, fill_value=0).to_numpy(float)
-    treat = np.column_stack([(df["pharmacy"] == p).to_numpy(float) for p in pharmacies[1:]])
-    full = np.hstack([block, treat])
+    # Convert price into numeric values
+    df["price_per_unit"] = pd.to_numeric(
+        df["price_per_unit"], errors="coerce"
+    )
 
-    def fit(x):
-        beta = np.linalg.lstsq(x, y, rcond=None)[0]
-        resid = y - x @ beta
-        return beta, float(resid @ resid), int(np.linalg.matrix_rank(x))
+    df["equivalent_key"] = (
+        df["equivalent_key"].fillna("").astype(str).str.strip()
+    )
 
-    beta_f, rss_f, rank_f = fit(full)
-    _, rss_r, rank_r = fit(block)
-    df1, df2 = rank_f - rank_r, len(y) - rank_f
-    if df1 < 1 or df2 < 1 or rss_f <= 0:
-        return {"error": "Not enough matched listings for a valid ANOVA (need repeated prices within pharmacies)."}
+    # Remove invalid records
+    df = df[
+        df["price_per_unit"].notna()
+        & (df["price_per_unit"] > 0)
+        & df["equivalent_key"].ne("")
+        & df["pharmacy"].isin(PHARMACIES)
+    ]
 
-    f_stat = ((rss_r - rss_f) / df1) / (rss_f / df2)
-    p_value = float(f_dist.sf(f_stat, df1, df2))
-    base = float(np.mean(beta_f[:len(keys)]))
-    adjusted = {pharmacies[0]: base}
-    for i, name in enumerate(pharmacies[1:]):
-        adjusted[name] = base + float(beta_f[len(keys) + i])
+    # Keep medicines sold by at least two pharmacies
+    df = df[
+        df.groupby("equivalent_key")["pharmacy"]
+        .transform("nunique") >= 2
+    ]
 
-    return {
-        "groups": {p: round(adjusted[p], 3) for p in pharmacies},
-        "raw_means": {p: round(float(df.loc[df["pharmacy"] == p, "price_per_unit"].mean()), 3) for p in pharmacies},
-        "sample_sizes": {p: int((df["pharmacy"] == p).sum()) for p in pharmacies},
-        "medicines": keys,
-        "f_stat": round(float(f_stat), 4),
-        "p_value": p_value,
-        "df": (df1, df2),
-        "significant": bool(p_value < 0.05),
-        "note": "Same composition, strength and dosage form only; price per tablet/capsule removes pack-size differences.",
-    }
+    if (
+        df.empty
+        or df["pharmacy"].nunique() < 2
+        or df["equivalent_key"].nunique() < 2
+    ):
+        return {
+            "error": "At least two pharmacies and two matched medicines are required."
+        }
+
+    # Check repeated observations for interaction analysis
+    cell_counts = df.groupby(
+        ["equivalent_key", "pharmacy"]
+    ).size()
+
+    if not (cell_counts >= 2).any():
+        return {
+            "error": (
+                "Insufficient repeated observations for Two-Way ANOVA "
+                "with interaction. More repeated listings are required."
+            )
+        }
+
+    try:
+        # Two-Way ANOVA with interaction
+        model = ols(
+            "price_per_unit ~ C(equivalent_key, Sum) * C(pharmacy, Sum)",
+            data=df
+        ).fit()
+
+        if model.df_resid <= 0:
+            return {
+                "error": "Not enough residual degrees of freedom."
+            }
+
+        # Type III ANOVA
+        table = anova_lm(model, typ=3)
+
+        effects = []
+
+        
+        for term, row in table.iterrows():
+
+            # Skip Intercept and Residual rows
+            if term in ["Intercept", "Residual"]:
+                continue
+
+            if ":" in term:
+                label = "Medicine × Pharmacy Interaction"
+
+            elif "equivalent_key" in term:
+                label = "Medicine Effect"
+
+            elif "pharmacy" in term:
+                label = "Pharmacy Effect"
+
+            else:
+                continue
+
+
+            f_value = (
+                float(row["F"])
+                if pd.notna(row["F"]) else None
+            )
+
+            p_value = (
+                float(row["PR(>F)"])
+                if pd.notna(row["PR(>F)"]) else None
+            )
+
+            effects.append({
+                "effect": label,
+                "f_stat": f_value,
+                "p_value": p_value,
+                "significant": (
+                    bool(p_value < 0.05)
+                    if p_value is not None else False
+                )
+            })
+
+        # Calculate raw pharmacy means
+        raw_means = {
+            p: round(
+                float(
+                    df.loc[
+                        df["pharmacy"] == p,
+                        "price_per_unit"
+                    ].mean()
+                ), 3
+            )
+            for p in PHARMACIES
+            if p in set(df["pharmacy"])
+        }
+
+        # Calculate sample sizes
+        sample_sizes = {
+            p: int((df["pharmacy"] == p).sum())
+            for p in PHARMACIES
+            if p in set(df["pharmacy"])
+        }
+
+        return {
+            "effects": effects,
+            "raw_means": raw_means,
+            "sample_sizes": sample_sizes,
+            "medicines": sorted(df["equivalent_key"].unique()),
+            "observations": len(df),
+            "note": (
+                "Two-Way ANOVA tests pharmacy effect, medicine effect "
+                "and their interaction."
+            )
+        }
+
+    except Exception as e:
+        return {
+            "error": f"Two-Way ANOVA failed: {e}"
+        }
 
 def _corr_row(label, x, y, note=""):
     """Pearson + Spearman correlation for two numeric series (NaNs dropped)."""
@@ -285,7 +383,7 @@ def home():
         anova_data = anova_data[
             anova_data["category"].astype(str).str.casefold() == category_filter.casefold()
         ]
-    matched_anova = calculate_matched_anova(all_data)
+    two_way_anova = calculate_two_way_anova(all_data)
     correlation = calculate_correlations(all_data)
     categories = sorted(
         {str(x).strip() for x in all_data["category"].dropna().astype(str) if str(x).strip()},
@@ -407,7 +505,7 @@ def home():
 
         hub_loaded=not hub.empty, primary_medicine=primary_medicine,
 
-        equivalent_rows=equivalent_rows, equivalent_note=equivalent_note, matched_anova=matched_anova,correlation=correlation,
+        equivalent_rows=equivalent_rows, equivalent_note=equivalent_note, two_way_anova=two_way_anova,correlation=correlation,
         
         loaded_files=loaded_files
 
