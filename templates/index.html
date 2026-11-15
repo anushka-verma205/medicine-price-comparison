@@ -1,0 +1,657 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Medicine Price Analysis</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@sgratzl/chartjs-chart-boxplot@4.4.0/build/index.umd.min.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">✚</span>
+    <div>
+      <h1>Medicine Price Analysis</h1>
+      <p>Medicine Prices Variation Across Pharmacies</p>
+    </div>
+  </div>
+</header>
+
+<main class="container">
+
+  {% with messages = get_flashed_messages(with_categories=true) %}
+    {% if messages %}
+      {% for category, message in messages %}
+        <div class="alert {{ category }}">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+
+  <!-- DATA SOURCE -->
+  <section class="panel upload-panel">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">LOCAL DATA SOURCE</p>
+        <h3>Catalogue loaded from your project folder</h3>
+      </div>
+      <span class="status-pill">● Local file</span>
+    </div>
+
+    {% for f in loaded_files %}
+    <div class="local-file-row">
+      <div class="file-symbol">📄</div>
+      <div class="local-file-info">
+        <strong>{{ f.name }}</strong>
+        <small>{{ f.folder }} · {{ "{:,}".format(f.records) }} records</small>
+      </div>
+      <span class="loaded-label">Loaded</span>
+    </div>
+    {% else %}
+    <div class="local-file-row">
+      <div class="file-symbol">📄</div>
+      <div class="local-file-info">
+        <strong>No data files detected</strong>
+        <small>data/raw/janaushadhi/ and data/raw/hubscrape/</small>
+      </div>
+      <span class="loaded-label">Not detected</span>
+    </div>
+    {% endfor %}
+  </section>
+
+  {% if not data_loaded %}
+
+  <section class="empty panel">
+    <div class="empty-icon">📊</div>
+    <h3>Your analysis will appear here</h3>
+    <p>
+      Place your Jan Aushadhi CSV inside
+      <b>data/raw/janaushadhi/</b>.
+      The website reads it automatically.
+      Supported columns include <b>Generic Name</b>,
+      <b>Drug Code</b>, <b>Unit Size</b>, <b>MRP</b>
+      and <b>Group Name</b>.
+    </p>
+  </section>
+
+  {% else %}
+
+  <!-- SEARCH -->
+  <section class="filter-panel panel">
+    <form method="GET" action="/" class="filters name-search-only">
+      <div>
+        <label for="search">Search by medicine name</label>
+        <input
+          id="search"
+          name="search"
+          value="{{ search }}"
+          placeholder="Enter medicine name..."
+        >
+      </div>
+
+      <button class="primary filter-button" type="submit">Search</button>
+      <a class="reset" href="/">Show all medicines</a>
+    </form>
+  </section>
+
+  <!-- EQUIVALENT MEDICINES -->
+  {% if search %}
+  <section class="section-block equivalent-section">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">MEDICINE MATCHING</p>
+        <h3>Equivalent medicines</h3>
+        <p class="section-description">
+          Alternatives are shown only when composition,
+          strength and dosage form match in the available data.
+        </p>
+      </div>
+    </div>
+
+    {% if primary_medicine %}
+
+    <div class="panel primary-medicine-card">
+      <span class="result-label">PRIMARY SEARCH RESULT</span>
+      <h4>{{ primary_medicine.product_name }}</h4>
+
+      <div class="medicine-meta">
+        <span><b>Brand:</b> {{ primary_medicine.brand or 'Not provided' }}</span>
+        <span><b>Composition:</b> {{ primary_medicine.composition or 'Not provided' }}</span>
+        <span><b>Strength:</b> {{ primary_medicine.strength or 'Not provided' }}</span>
+        <span><b>Dosage Form:</b> {{ primary_medicine.dosage_form or 'Not provided' }}</span>
+        <span><b>Pack:</b> {{ primary_medicine.pack_size or 'Not provided' }}</span>
+        <span>
+          <b>Price:</b>
+          {% if primary_medicine.selling_price %}
+            ₹{{ "%.2f"|format(primary_medicine.selling_price|float) }}
+          {% else %}
+            Not available
+          {% endif %}
+        </span>
+        <span><b>Source:</b> {{ primary_medicine.pharmacy or 'Not provided' }}</span>
+      </div>
+    </div>
+
+    <div class="panel table-panel equivalent-results">
+      <h4>Branded / generic alternatives</h4>
+
+      {% if equivalent_rows %}
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Medicine</th>
+              <th>Brand</th>
+              <th>Composition</th>
+              <th>Strength</th>
+              <th>Form</th>
+              <th>Pack</th>
+              <th>Source</th>
+              <th>Price</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {% for r in equivalent_rows %}
+            <tr>
+              <td>{{ r.product_name }}</td>
+              <td>{{ r.brand or '—' }}</td>
+              <td>{{ r.composition }}</td>
+              <td>{{ r.strength }}</td>
+              <td>{{ r.dosage_form }}</td>
+              <td>{{ r.pack_size or '—' }}</td>
+              <td>{{ r.pharmacy or '—' }}</td>
+              <td>
+                {% if r.selling_price %}
+                  ₹{{ "%.2f"|format(r.selling_price|float) }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      {% else %}
+      <p class="equivalent-note">
+        {{ equivalent_note or 'No confirmed equivalent alternatives were found in the loaded data.' }}
+      </p>
+      {% endif %}
+    </div>
+
+    {% else %}
+    <div class="panel equivalent-note">{{ equivalent_note }}</div>
+    {% endif %}
+  </section>
+  {% endif %}
+
+  <!-- OVERVIEW CARDS -->
+  <section class="stats-grid">
+    <div class="stat-card">
+      <span>Total catalogue records</span>
+      <strong>{{ "{:,}".format(stats.records) }}</strong>
+      <small>Loaded after filters</small>
+    </div>
+
+    <div class="stat-card">
+      <span>Medicine categories</span>
+      <strong>{{ "{:,}".format(stats.categories) }}</strong>
+      <small>Distinct groups</small>
+    </div>
+
+    <div class="stat-card">
+      <span>Average listed price</span>
+      <strong>
+        {% if stats.average is not none %}
+          ₹{{ "{:,.2f}".format(stats.average) }}
+        {% else %}
+          —
+        {% endif %}
+      </strong>
+      <small>Valid positive prices</small>
+    </div>
+
+    <div class="stat-card">
+      <span>Highest listed price</span>
+      <strong>
+        {% if stats.highest is not none %}
+          ₹{{ "{:,.2f}".format(stats.highest) }}
+        {% else %}
+          —
+        {% endif %}
+      </strong>
+      <small>Valid positive prices</small>
+    </div>
+  </section>
+
+  <!-- NAVIGATION -->
+  <nav class="tabs">
+    <a href="#overview" class="active">Overview</a>
+    <a href="#categories-section">Category analysis</a>
+    <a href="#correlation">Correlation</a>
+    <a href="#explorer">Medicine explorer</a>
+  </nav>
+
+  <!-- OVERVIEW -->
+  <section id="overview" class="section-block">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">AT A GLANCE</p>
+        <h3>Catalogue overview</h3>
+      </div>
+    </div>
+
+    <div class="charts-grid">
+      <div class="panel chart-panel">
+        <h4>Medicine records by category</h4>
+        <canvas id="categoryChart"></canvas>
+      </div>
+
+      <div class="panel chart-panel">
+        <h4>Listed price distribution</h4>
+        <canvas id="priceChart"></canvas>
+      </div>
+    </div>
+  </section>
+
+  <!-- CATEGORY ANALYSIS -->
+  <section id="categories-section" class="section-block">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">BREAKDOWN</p>
+        <h3>Category analysis</h3>
+        <p class="section-description">
+          Click any category to filter the Medicine Explorer and update the statistical analysis.
+        </p>
+      </div>
+    </div>
+
+    <div class="panel table-panel">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Category</th>
+              <th>Records</th>
+              <th>Average price</th>
+              <th>Minimum</th>
+              <th>Maximum</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {% for r in category_stats %}
+            <tr>
+              <td>
+                <a class="category-link"
+                   href="{{ url_for('home', category=r.category, search=search) }}#categories-section">
+                  {{ r.category }}
+                </a>
+              </td>
+              <td>{{ r.medicine_records }}</td>
+              <td>
+                {% if r.average_listed_price != "" %}
+                  ₹{{ "%.2f"|format(r.average_listed_price|float) }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td>
+                {% if r.minimum_listed_price != "" %}
+                  ₹{{ "%.2f"|format(r.minimum_listed_price|float) }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td>
+                {% if r.maximum_listed_price != "" %}
+                  ₹{{ "%.2f"|format(r.maximum_listed_price|float) }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <!-- MATCHED (LIKE-FOR-LIKE) ANOVA -->
+      <div class="anova-inline">
+        <div class="anova-inline-heading">
+          <div>
+            <p class="eyebrow">STATISTICAL INSIGHT · LIKE-FOR-LIKE</p>
+            <h4>Price per Unit by Pharmacy (matched medicines)</h4>
+            <p class="section-description">
+              Two-way ANOVA (medicine as block) · Significance level: 0.05
+            </p>
+          </div>
+          <span class="anova-tag">ANOVA</span>
+        </div>
+
+        {% if matched_anova.error %}
+        <div class="anova-error">{{ matched_anova.error }}</div>
+        {% else %}
+        <div class="anova-content">
+          <div class="anova-table-area">
+            <h5>Adjusted Price per Tablet/Capsule</h5>
+            <div class="table-wrap">
+              <table class="anova-table">
+                <thead><tr><th>Pharmacy</th><th>Adjusted price / unit</th><th>Raw mean</th><th>Listings</th></tr></thead>
+                <tbody>
+                  {% for pharmacy, price in matched_anova.groups.items() %}
+                  <tr>
+                    <td class="pharmacy-name">{{ pharmacy }}</td>
+                    <td>₹{{ "%.3f"|format(price) }}</td>
+                    <td>₹{{ "%.3f"|format(matched_anova.raw_means[pharmacy]) }}</td>
+                    <td>{{ matched_anova.sample_sizes[pharmacy] }}</td>
+                  </tr>
+                  {% endfor %}
+                </tbody>
+              </table>
+            </div>
+            <p class="section-description">Matched medicines: {{ matched_anova.medicines|join(', ') }}</p>
+          </div>
+          <div class="anova-results">
+            <h5>Test Results</h5>
+            <div class="anova-metrics">
+              <div class="anova-metric"><span>F-Statistic</span><strong>{{ matched_anova.f_stat }}</strong></div>
+              <div class="anova-metric"><span>P-Value</span><strong>{{ "%.6f"|format(matched_anova.p_value) }}</strong></div>
+              <div class="anova-metric"><span>Degrees of freedom</span><strong>{{ matched_anova.df[0] }}, {{ matched_anova.df[1] }}</strong></div>
+            </div>
+            {% if matched_anova.significant %}
+            <div class="anova-conclusion significant"><strong>✓ Significant price difference</strong>
+              <p>After comparing identical medicines, at least one pharmacy's price per unit differs (p &lt; 0.05).</p></div>
+            {% else %}
+            <div class="anova-conclusion not-significant"><strong>No significant difference found</strong>
+              <p>For identical medicines, there is insufficient evidence that price per unit differs between pharmacies.</p></div>
+            {% endif %}
+            <p class="section-description">{{ matched_anova.note }}</p>
+          </div>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </section>
+
+    <!-- CORRELATION -->
+  <section id="correlation" class="section-block">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">STATISTICAL INSIGHT</p>
+        <h3>Correlation analysis</h3>
+        <p class="section-description">
+          Pearson (linear) and Spearman (rank) coefficients. Correlation shows association, not cause.
+        </p>
+      </div>
+    </div>
+
+    <div class="panel table-panel">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Relationship</th><th>n</th><th>Pearson r</th><th>p-value</th><th>Spearman ρ</th><th>Interpretation</th></tr>
+          </thead>
+          <tbody>
+            {% for c in correlation.rows %}
+            <tr>
+              <td>{{ c.label }}<br><small>{{ c.note }}</small></td>
+              <td>{{ c.n }}</td>
+              {% if c.error %}
+              <td colspan="4">{{ c.error }}</td>
+              {% else %}
+              <td>{{ c.pearson }}</td>
+              <td>{{ "%.4f"|format(c.pearson_p) }}</td>
+              <td>{{ c.spearman }}</td>
+              <td>{{ c.strength|capitalize }} {{ c.direction }} correlation{% if c.significant %} (significant){% else %} (not significant){% endif %}</td>
+              {% endif %}
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    {% if correlation.scatter %}
+    <div class="panel chart-panel" style="margin-top:16px">
+      <h4>Strength (mg) vs price per tablet/capsule</h4>
+      <canvas id="corrChart"></canvas>
+    </div>
+    {% endif %}
+  </section>
+
+  <!-- MEDICINE EXPLORER -->
+  <section id="explorer" class="section-block">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">LOOK UP A RECORD</p>
+        <h3>Medicine explorer</h3>
+
+        {% if selected_category %}
+        <p class="section-description">
+          Showing category: <b>{{ selected_category }}</b> ·
+          <a class="category-link" href="{{ url_for('home') }}#explorer">
+            Show all medicines
+          </a>
+        </p>
+        {% endif %}
+      </div>
+    </div>
+
+    <div class="panel table-panel">
+      <div class="table-wrap tall">
+        <table>
+          <thead>
+            <tr>
+              <th>Drug code</th>
+              <th>Medicine name</th>
+              <th>Pack size</th>
+              <th>Category</th>
+              <th>Source</th>
+              <th>MRP</th>
+              <th>Listed price</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {% for r in medicine_rows %}
+            <tr>
+              <td>{{ r.drug_code }}</td>
+              <td>{{ r.product_name }}</td>
+              <td>{{ r.pack_size }}</td>
+              <td>{{ r.category }}</td>
+              <td>{{ r.pharmacy or '—' }}</td>
+              <td>
+                {% if r.mrp != "" and r.mrp is not none %}
+                  ₹{{ "%.2f"|format(r.mrp|float) }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+              <td>
+                {% if r.selling_price != "" and r.selling_price is not none %}
+                  ₹{{ "%.2f"|format(r.selling_price|float) }}
+                {% else %}
+                  —
+                {% endif %}
+              </td>
+            </tr>
+            {% else %}
+            <tr><td colspan="7">No medicines match the current search or category.</td></tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- PRICE COMPARISON -->
+  {% if comparison_rows %}
+  <section class="section-block">
+    <div class="section-heading">
+      <div>
+        <p class="eyebrow">PHASE 2</p>
+        <h3>Cross-source price comparison</h3>
+      </div>
+    </div>
+
+    <div class="panel table-panel">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Medicine</th>
+              <th>Price basis</th>
+              <th>Lowest source</th>
+              <th>Lowest price</th>
+              <th>Highest source</th>
+              <th>Highest price</th>
+              <th>Difference</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {% for r in comparison_rows %}
+            <tr>
+              <td>{{ r.product_name }}</td>
+              <td>{{ r.price_basis }}</td>
+              <td>{{ r.lowest_pharmacy }}</td>
+              <td>₹{{ "%.2f"|format(r.lowest_price|float) }}</td>
+              <td>{{ r.highest_pharmacy }}</td>
+              <td>₹{{ "%.2f"|format(r.highest_price|float) }}</td>
+              <td>₹{{ "%.2f"|format(r.potential_saving|float) }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+  {% endif %}
+
+  <!-- DOWNLOADS -->
+  <section class="download-row">
+    <a class="primary"
+       href="{{ url_for('download_cleaned', search=search) }}">
+      Download cleaned CSV
+    </a>
+
+    {% if not is_phase_one %}
+    <a class="secondary"
+       href="{{ url_for('download_comparison', search=search) }}">
+      Download comparison CSV
+    </a>
+    {% endif %}
+  </section>
+
+  {% endif %}
+
+  <footer>
+    Academic research dashboard · This website does not provide medical advice.
+  </footer>
+
+</main>
+
+{% if data_loaded %}
+<script>
+const catData = {{ chart_categories|tojson }};
+const priceData = {{ chart_prices|tojson }};
+
+if (window.ChartBoxPlot) {
+  Chart.register(
+    ChartBoxPlot.BoxPlotController,
+    ChartBoxPlot.BoxAndWiskers
+  );
+}
+
+if (catData.length) new Chart(document.getElementById('categoryChart'), {
+  type: 'bar',
+  data: {
+    labels: catData.map(x => x.name),
+    datasets: [{
+      label: 'Medicine records',
+      data: catData.map(x => x.count),
+      borderWidth: 1
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    indexAxis: 'y',
+    plugins: {
+      legend: { display: false }
+    },
+    scales: {
+      x: { beginAtZero: true }
+    }
+  }
+});
+
+if (priceData.length) new Chart(document.getElementById('priceChart'), {
+  type: 'boxplot',
+  data: {
+    labels: ['Medicine prices'],
+    datasets: [{
+      label: 'Listed price (₹)',
+      data: [priceData],
+      backgroundColor: 'rgba(36, 99, 235, 0.18)',
+      borderColor: '#2463eb',
+      borderWidth: 1.5,
+      outlierRadius: 3
+    }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        callbacks: {
+          label: () => 'Price distribution (₹)'
+        }
+      }
+    },
+    scales: {
+      y: {
+        beginAtZero: true,
+        title: {
+          display: true,
+          text: 'Price (₹)'
+        }
+      }
+    }
+  }
+});
+
+const corrData = {{ correlation.scatter|tojson }};
+const corrColors = ['#2463eb', '#e8590c', '#2f9e44', '#9c36b5'];
+if (document.getElementById('corrChart') && Object.keys(corrData).length) {
+  new Chart(document.getElementById('corrChart'), {
+    type: 'scatter',
+    data: {
+      datasets: Object.keys(corrData).map((name, i) => ({
+        label: name,
+        data: corrData[name],
+        backgroundColor: corrColors[i % corrColors.length],
+        pointRadius: 4
+      }))
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      scales: {
+        x: { type: 'linear', title: { display: true, text: 'Strength (mg)' } },
+        y: { beginAtZero: true, title: { display: true, text: 'Price per unit (₹)' } }
+      }
+    }
+  });
+}
+</script>
+{% endif %}
+
+</body>
+</html>
