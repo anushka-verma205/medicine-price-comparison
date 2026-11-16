@@ -13,7 +13,7 @@ BASE_DIR = Path(__file__).resolve().parent
 
 JAN_DIR = BASE_DIR / "data" / "raw" / "janaushadhi"
 
-HUB_DIR = BASE_DIR / "data" / "raw" / "hubscrape"
+HUB_DIR = BASE_DIR / "data" / "raw" / "webscrape"
 
 app = Flask(__name__)
 
@@ -23,7 +23,7 @@ def load_data():
 
     jan = load_local_folder(JAN_DIR, "Jan Aushadhi")
 
-    hub = load_local_folder(HUB_DIR, "HubScrape")
+    hub = load_local_folder(HUB_DIR, "WebScrape")
 
     return jan, hub, combine_sources(jan, hub)
 
@@ -46,7 +46,6 @@ def calculate_two_way_anova(data):
 
     df = data[needed].copy()
 
-    # Convert price into numeric values
     df["price_per_unit"] = pd.to_numeric(
         df["price_per_unit"], errors="coerce"
     )
@@ -55,7 +54,6 @@ def calculate_two_way_anova(data):
         df["equivalent_key"].fillna("").astype(str).str.strip()
     )
 
-    # Remove invalid records
     df = df[
         df["price_per_unit"].notna()
         & (df["price_per_unit"] > 0)
@@ -63,7 +61,6 @@ def calculate_two_way_anova(data):
         & df["pharmacy"].isin(PHARMACIES)
     ]
 
-    # Keep medicines sold by at least two pharmacies
     df = df[
         df.groupby("equivalent_key")["pharmacy"]
         .transform("nunique") >= 2
@@ -78,7 +75,6 @@ def calculate_two_way_anova(data):
             "error": "At least two pharmacies and two matched medicines are required."
         }
 
-    # Check repeated observations for interaction analysis
     cell_counts = df.groupby(
         ["equivalent_key", "pharmacy"]
     ).size()
@@ -92,7 +88,6 @@ def calculate_two_way_anova(data):
         }
 
     try:
-        # Two-Way ANOVA with interaction
         model = ols(
             "price_per_unit ~ C(equivalent_key, Sum) * C(pharmacy, Sum)",
             data=df
@@ -103,15 +98,12 @@ def calculate_two_way_anova(data):
                 "error": "Not enough residual degrees of freedom."
             }
 
-        # Type III ANOVA
         table = anova_lm(model, typ=3)
 
         effects = []
 
-        
         for term, row in table.iterrows():
 
-            # Skip Intercept and Residual rows
             if term in ["Intercept", "Residual"]:
                 continue
 
@@ -148,7 +140,6 @@ def calculate_two_way_anova(data):
                 )
             })
 
-        # Calculate raw pharmacy means
         raw_means = {
             p: round(
                 float(
@@ -162,7 +153,6 @@ def calculate_two_way_anova(data):
             if p in set(df["pharmacy"])
         }
 
-        # Calculate sample sizes
         sample_sizes = {
             p: int((df["pharmacy"] == p).sum())
             for p in PHARMACIES
@@ -214,14 +204,11 @@ def calculate_correlations(data):
     df = data.copy()
     rows = []
 
-    # 1. Does the discounted selling price track the MRP? Retail pharmacies only:
-    # Jan Aushadhi has no separate selling price (price = MRP), which would give a fake r = 1.
     retail = df[df["pharmacy"].isin(["Tata 1mg", "Apollo Pharmacy"])]
     row, _ = _corr_row("MRP vs listed price (Tata 1mg + Apollo)", retail["mrp"], retail["selling_price"],
                        "Retail pharmacy listings only")
     rows.append(row)
 
-    # 2. Does a higher strength cost more per tablet/capsule? (single-strength solid forms)
     strength_mg = df["strength"].astype(str).str.extract(
         r"^\s*(\d+(?:\.\d+)?)\s*mg\s*$", flags=re.I)[0]
     solid = df["dosage_form"].astype(str).str.casefold().isin(["tablet", "capsule"])
@@ -234,15 +221,13 @@ def calculate_correlations(data):
                          "Single-strength tablets and capsules")
     rows.append(row)
 
-    # 3. Same relationship for paracetamol only (comparable across all three sources)
     para = sub[sub["composition"].astype(str).str.contains("paracetamol", case=False)
                & ~sub["composition"].astype(str).str.contains(r"\+|\band\b", case=False, regex=True)]
-    row, _ = _corr_row("Strength vs price per unit (paracetamol only)",
+    row, _ = _corr_row("Strength vs price per unit (filetered search)",
                        para["strength_mg"], para["price_per_unit"],
                        "Single-ingredient paracetamol, all pharmacies")
     rows.append(row)
 
-    # 4. Discount vs MRP for retail pharmacies (do pricier medicines get bigger discounts?)
     row, _ = _corr_row("MRP vs discount % (Tata 1mg + Apollo)", retail["mrp"], retail["discount_percent"],
                        "Retail pharmacy listings only")
     rows.append(row)
@@ -305,10 +290,6 @@ def find_equivalent_medicines(data, search):
     if matches.empty:
 
         return None, pd.DataFrame(), "No medicine matched your search."
-
-    # Prefer a single-ingredient, fully described pharmacy record for the primary result.
-
-    # This avoids selecting a combination medicine merely because it contains the query salt.
 
     exact = matches[
 
@@ -376,14 +357,40 @@ def home():
 
     data = filtered_data(all_data)
 
-    # Keep ANOVA in sync with the category selected in Category Analysis.
     category_filter = request.args.get("category", "").strip()
     anova_data = all_data.copy()
     if category_filter and not anova_data.empty:
         anova_data = anova_data[
             anova_data["category"].astype(str).str.casefold() == category_filter.casefold()
         ]
-    two_way_anova = calculate_two_way_anova(all_data)
+    
+    search_term = request.args.get("search", "").strip()
+
+    anova_data = all_data.copy()
+
+    if search_term:
+        search_mask = pd.Series(False, index=all_data.index)
+
+        for column in [
+            "product_name",
+            "brand",
+            "composition",
+            "active_ingredient"
+        ]:
+            if column in all_data.columns:
+                search_mask |= all_data[column].astype(str).str.contains(
+                    search_term, case=False, na=False, regex=False
+                )
+
+        anova_data = all_data[search_mask]
+
+    two_way_anova = calculate_two_way_anova(anova_data)
+
+    show_anova = (
+        not anova_data.empty
+        and not bool(two_way_anova.get("error"))
+    )
+
     correlation = calculate_correlations(all_data)
     categories = sorted(
         {str(x).strip() for x in all_data["category"].dropna().astype(str) if str(x).strip()},
@@ -393,7 +400,7 @@ def home():
     is_phase_one = hub.empty
 
     loaded_files = []
-    for folder, frame in (("data/raw/janaushadhi/", jan), ("data/raw/hubscrape/", hub)):
+    for folder, frame in (("data/raw/janaushadhi/", jan), ("data/raw/webscrape/", hub)):
         if not frame.empty:
             for source, count in frame.groupby("data_source_file").size().items():
                 loaded_files.append({"name": str(source).split(": ", 1)[-1], "folder": folder, "records": int(count)})
@@ -503,7 +510,7 @@ def home():
 
         source_rows=source_rows, is_phase_one=is_phase_one, comparison_rows=comparison_rows,
 
-        hub_loaded=not hub.empty, primary_medicine=primary_medicine,
+        hub_loaded=not hub.empty, primary_medicine=primary_medicine, show_anova=show_anova,
 
         equivalent_rows=equivalent_rows, equivalent_note=equivalent_note, two_way_anova=two_way_anova,correlation=correlation,
         
@@ -544,8 +551,6 @@ def download_comparison():
     comparison = price_comparison(data)
 
     if comparison.empty:
-
-        # Explicitly explain why records could not be compared; never fabricate a price match.
 
         comparison = data[["product_name", "brand", "composition", "strength", "dosage_form", "pharmacy", "selling_price", "data_source_file"]].copy()
 

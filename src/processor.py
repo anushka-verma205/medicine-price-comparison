@@ -55,7 +55,6 @@ def normalize_one(df, source_hint="Unknown"):
         column = find_column(df.columns, aliases)
         out[target] = df[column] if column else np.nan
 
-    # Keep the official catalogue identifier when it is available.
     drug_code_col = find_column(df.columns, ["drug_code", "medicine_code", "product_code"])
     sr_no_col = find_column(df.columns, ["sr_no", "serial_no", "serial_number"])
     out["drug_code"] = df[drug_code_col] if drug_code_col else ""
@@ -68,9 +67,6 @@ def normalize_one(df, source_hint="Unknown"):
     out["selling_price"] = numeric(out["selling_price"])
     out["discount_percent"] = numeric(out["discount_percent"])
 
-    # Jan Aushadhi catalogue exports provide MRP, not a separate discounted selling price.
-    # Use that listed catalogue price for Phase 1 price analysis, without presenting it as
-    # a live retail pharmacy selling price.
     is_jan_catalogue = "jan" in str(source_hint).lower() and "aushadhi" in str(source_hint).lower()
     if is_jan_catalogue:
         out["selling_price"] = out["selling_price"].fillna(out["mrp"])
@@ -86,20 +82,14 @@ def normalize_one(df, source_hint="Unknown"):
         np.nan,
     )
     out["discount_percent"] = out["discount_percent"].fillna(pd.Series(calculated_discount, index=out.index))
-    # Use structured ingredient fields when composition is absent.
     out["composition"] = out["composition"].replace("", np.nan).fillna(out["active_ingredient"]).fillna("")
     out["search_composition"] = out["search_composition"].replace("", np.nan).fillna(out["active_ingredient"]).fillna("")
 
-    # Some exports put a long free-text description in the composition column
-    # (e.g. "Active Ingredient: ... Excipients: ..."). Use the structured
-    # ingredient instead so the equivalence key stays meaningful.
     long_text = out["composition"].str.len() > 100
     has_ingredient = out["active_ingredient"].str.strip().ne("")
     out.loc[long_text & has_ingredient, "composition"] = out.loc[long_text & has_ingredient, "active_ingredient"]
     out["composition"] = out["composition"].str.replace(r"^\s*Active Ingredients?\s*:\s*", "", regex=True, flags=re.I)
 
-    # Jan Aushadhi supplies medicine details inside Generic Name rather than
-    # separate composition, strength and dosage-form columns. Extract them.
     if is_jan_catalogue:
         generic_names = out["product_name"].fillna("").astype(str)
 
@@ -125,8 +115,6 @@ def normalize_one(df, source_hint="Unknown"):
         out["dosage_form"] = generic_names.apply(jan_form)
         out["composition"] = generic_names
 
-    # Some pharmacy exports omit the strength column even though it is in
-    # the product name (for example, Dolo-650 Tablet).
     volume_only = out["strength"].fillna("").astype(str).str.fullmatch(r"\s*\d+(?:\.\d+)?\s*ml\s*", case=False)
     missing_strength = out["strength"].fillna("").astype(str).str.strip().eq("") | volume_only
     if missing_strength.any():
@@ -139,14 +127,10 @@ def normalize_one(df, source_hint="Unknown"):
                 value,
                 flags=re.I
             )
-            # A bare volume such as "60 ml" is pack volume, not medicine strength.
             found = [item for item in found if not re.fullmatch(r"\d+(?:\.\d+)?\s*ml", item, flags=re.I)]
             if found:
                 return "+".join(re.sub(r"\s+", "", item.lower()) for item in found)
 
-            # Some Apollo titles omit the unit, e.g. Dolo-650 Tablet.
-            # Look only before the dosage-form word so pack counts such as 15's
-            # are not mistaken for medicine strength.
             before_form = re.split(
                 r"\b(?:tablets?|tabs?|capsules?|suspension|syrup|drops?)\b",
                 value,
@@ -163,7 +147,6 @@ def normalize_one(df, source_hint="Unknown"):
         extracted = names.apply(extract_name_strength)
         out.loc[missing_strength, "strength"] = extracted
 
-    # Fill a missing dosage form from the product name only.
     missing_form = out["dosage_form"].fillna("").astype(str).str.strip().eq("")
     if missing_form.any():
         def infer_form_from_name(value):
@@ -175,8 +158,6 @@ def normalize_one(df, source_hint="Unknown"):
 
         out.loc[missing_form, "dosage_form"] = out.loc[missing_form, "product_name"].apply(infer_form_from_name)
 
-    # Category is not supplied by every pharmacy export. Infer a broad analytics category
-    # from ingredient/name keywords instead of leaving the dashboard cell blank.
     def infer_category(row):
         existing = str(row.get("category", "")).strip()
         if existing and existing.lower() not in {"nan", "none"}:
@@ -197,8 +178,6 @@ def normalize_one(df, source_hint="Unknown"):
 
     out["category"] = out.apply(infer_category, axis=1)
 
-    # Canonicalize category labels so spelling/case/spacing variants collapse
-    # into one dashboard category (including catalogue group-name variants).
     def normalize_category(value):
         raw = re.sub(r"\s+", " ", str(value)).strip()
         key = re.sub(r"[^a-z0-9]+", " ", raw.casefold()).strip()
@@ -207,7 +186,6 @@ def normalize_one(df, source_hint="Unknown"):
             return "Other / Unclassified"
 
         aliases = {
-            # Analgesic categories
             "analgesic": "Analgesic / Antipyretic",
             "analgesics": "Analgesic / Antipyretic",
             "antipyretic": "Analgesic / Antipyretic",
@@ -217,13 +195,9 @@ def normalize_one(df, source_hint="Unknown"):
             "analgesic anti inflammatory": "Analgesic / Antipyretic",
             "pain killer": "Analgesic / Antipyretic",
             "painkillers": "Analgesic / Antipyretic",
-
-            # Gastrointestinal categories
             "gastro": "Gastrointestinal",
             "gastrointestinal": "Gastrointestinal",
             "gastrointestinal git": "Gastrointestinal",
-
-            # Other categories
             "antibiotics": "Antibiotic",
             "anti allergic": "Antiallergic",
             "anti allergy": "Antiallergic",
@@ -246,11 +220,8 @@ def normalize_one(df, source_hint="Unknown"):
     def norm_text(value):
         return re.sub(r"\s+", " ", str(value).lower()).strip()
 
-    # Normalize ingredient text while retaining all active ingredients.
-    # Paracetamol and Acetaminophen are treated as synonyms.
     def normalize_composition(value):
         text = norm_text(value)
-        text = re.sub(r"\bacetaminophen\b", "paracetamol", text)
         text = re.sub(r"\b(ip|usp|bp)\b", " ", text)
         text = re.sub(r"\([^)]*\)", " ", text)
         text = re.sub(r"\b\d+(?:\.\d+)?\s*(?:mg|mcg|g|ml|iu)\b", " ", text)
@@ -279,8 +250,6 @@ def normalize_one(df, source_hint="Unknown"):
     out["_provided_key"] = supplied_key
     out["comparison_key"] = out.apply(make_key, axis=1)
 
-    # Equivalence matching deliberately excludes pack size, but requires
-    # confirmed composition, strength and dosage form. Missing fields never match.
     def make_equivalent_key(row):
         parts = [normalize_composition(row["composition"]), normalize_strength(row["strength"]), normalize_form(row["dosage_form"])]
         if not all(str(value).strip() and str(value).lower() not in {"nan", "none"} for value in parts):
@@ -289,7 +258,6 @@ def normalize_one(df, source_hint="Unknown"):
 
     out["equivalent_key"] = out.apply(make_equivalent_key, axis=1)
 
-    # Stable ID for each pharmacy product listing; distinct from medicine matching.
     def make_product_id(row):
         identity = "|".join(
             str(row.get(field, "") or "").strip().casefold()
@@ -311,7 +279,6 @@ def read_file(file_or_path):
     name = str(getattr(file_or_path, "name", file_or_path)).lower()
     if name.endswith((".xlsx", ".xls")):
         return pd.read_excel(file_or_path)
-    # utf-8-sig handles common Excel CSV exports; fallback encodings help with Indian exports.
     try:
         return pd.read_csv(file_or_path, encoding="utf-8-sig")
     except UnicodeDecodeError:
@@ -344,15 +311,13 @@ def load_local_folder(folder, source_hint):
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def combine_sources(janaushadhi, hubscrape):
-    parts = [part for part in [janaushadhi, hubscrape] if part is not None and not part.empty]
+def combine_sources(janaushadhi, webscrape):
+    parts = [part for part in [janaushadhi, webscrape] if part is not None and not part.empty]
     if not parts:
         return pd.DataFrame()
     df = pd.concat(parts, ignore_index=True)
     df["selling_price"] = pd.to_numeric(df["selling_price"], errors="coerce")
     df["mrp"] = pd.to_numeric(df["mrp"], errors="coerce")
-    # Keep named catalogue rows even when price is missing/zero so data-quality
-    # reporting can account for them. Price charts filter to valid positive values.
     df = df[df["product_name"].fillna("").astype(str).str.strip().ne("")].copy()
     for column in ["product_name", "composition", "strength", "dosage_form", "pack_size"]:
         df[column] = df[column].fillna("").astype(str).str.strip()
@@ -366,13 +331,10 @@ def combine_sources(janaushadhi, hubscrape):
     df["pharmacy"] = pharmacy_key.map(pharmacy_aliases).fillna(df["pharmacy"])
     df["price_per_unit"] = np.nan
 
-    # For simple count-based packs such as 10's or 10 tablets, calculate price per item.
     pack_text = df["pack_size"].astype(str).str.strip()
     pack_count = pack_text.str.extract(
         r"^(\d+(?:\.\d+)?)\s*(?:'s|tabs?|tablets?|capsules?|caps?|sachets?|strips?)(?:\s+er)?$", flags=re.I
     )[0]
-    # Scraped exports sometimes give just the number (e.g. 15.0); that is a unit
-    # count only for solid forms, not for liquids where it is a volume.
     solid = df["dosage_form"].astype(str).str.casefold().isin(["tablet", "capsule"])
     bare = pack_text.str.extract(r"^(\d+(?:\.\d+)?)$")[0].where(solid)
     pack_count = pd.to_numeric(pack_count.fillna(bare), errors="coerce")
@@ -383,7 +345,6 @@ def combine_sources(janaushadhi, hubscrape):
 
 def price_comparison(df):
     """Compare the cheapest listing of each pharmacy for identical medicines.
-
     Identical = same composition + strength + dosage form. To keep the comparison
     like-for-like, price PER UNIT is used when the pack is a countable tablet/capsule
     pack; otherwise listings are compared only within the same pack size.
@@ -407,7 +368,6 @@ def price_comparison(df):
 
     rows = []
     for _, group in eligible.groupby("group_key"):
-        # cheapest listing per pharmacy, so one source can never be compared with itself
         best = group.loc[group.groupby("pharmacy")["compare_price"].idxmin()]
         if len(best) < 2:
             continue
